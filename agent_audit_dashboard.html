@@ -278,8 +278,8 @@
     const scanLabel = document.getElementById('scanLabel');
 
     const riskColors = score => {
-      if (score >= 70) return '#ff6b6b';
-      if (score >= 40) return '#ffb347';
+      if (score >= 60) return '#ff6b6b';
+      if (score >= 30) return '#ffb347';
       return '#36d399';
     };
 
@@ -345,9 +345,13 @@
             </div>
           </div>`;
         }).join('');
+        externalSummaryEl.style.display = 'block';
       } else {
         externalSummaryEl.innerHTML = '';
+        externalSummaryEl.style.display = 'none';
       }
+
+      riskSummaryEl.style.display = report.externalOnly && externalEntries.length ? 'none' : 'grid';
 
       permissionTable.innerHTML = `
         <tr><th>Agent / Skill</th><th>工具权限</th><th>高危</th><th>风险分</th><th>备注</th></tr>

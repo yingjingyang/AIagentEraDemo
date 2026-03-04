@@ -712,6 +712,7 @@ def generate_report(extra_skills: Optional[List[Dict[str, Any]]] = None) -> Dict
         "memory": memory_info,
         "logs": log_info,
         "tokens": token_info,
+        "externalOnly": bool(extra_skills),
     }
     report["privacyRisk"] = score_privacy(memory_info.get("sensitiveHits", 0))
     report["privilegeRisk"] = score_privilege(permissions)
