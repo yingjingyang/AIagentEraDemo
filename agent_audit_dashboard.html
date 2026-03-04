@@ -272,6 +272,7 @@
     const permissionTable = document.getElementById('permissionTable');
     const memoryTable = document.getElementById('memoryTable');
     const tokenTable = document.getElementById('tokenTable');
+    const tokenCard = tokenTable.closest('.card');
     const suggestionsEl = document.getElementById('suggestions');
     const lastRunEl = document.getElementById('last-run');
     const scanBtn = document.getElementById('scanBtn');
@@ -332,7 +333,7 @@
           ];
           return `
           <div class="card external-skill-block">
-            <h3>${escapeHtml(entry.name)} · 未安装 Skill</h3>
+            <h3>${escapeHtml(entry.name)}</h3>
             <div class="external-grid">
               ${metrics.map(metric => {
                 const value = typeof scores[metric.key] === 'number' ? scores[metric.key] : '-';
@@ -353,16 +354,17 @@
 
       riskSummaryEl.style.display = report.externalOnly && externalEntries.length ? 'none' : 'grid';
 
+      const tableEntries = report.externalOnly ? permissions.filter(p => p.externalScores) : permissions;
       permissionTable.innerHTML = `
         <tr><th>Agent / Skill</th><th>工具权限</th><th>高危</th><th>风险分</th><th>备注</th></tr>
-        ${permissions.map(p => `
+        ${tableEntries.length ? tableEntries.map(p => `
           <tr>
             <td>${escapeHtml((p && p.name) || '-')}</td>
             <td>${escapeHtml((((p && p.tools) || []).join(', ')) || '-')}</td>
             <td><span class="badge">${escapeHtml((((p && p.highRiskTools) || []).join(', ')) || '-')}</span></td>
             <td>${typeof p.riskScore === 'number' ? p.riskScore : '-'}</td>
             <td>${escapeHtml((((p && p.notes) || []).join('；')) || '-')}</td>
-          </tr>`).join('')}
+          </tr>`).join('') : '<tr><td colspan="5">暂无数据</td></tr>'}
       `;
 
       const memoryFiles = report.memory?.files || [];
@@ -388,6 +390,8 @@
             <td>${row.usage}</td>
           </tr>`).join('') : '<tr><td colspan="2">没有捕获到 token 数据</td></tr>'}
       `;
+
+      tokenCard.style.display = report.externalOnly ? 'none' : '';
 
       const suggestions = report.suggestions?.length ? report.suggestions : ['暂无建议'];
       suggestionsEl.innerHTML = suggestions.map(text => `
