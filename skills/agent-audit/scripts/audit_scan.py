@@ -13,10 +13,21 @@ import os
 import re
 import sys
 import tempfile
+import ssl
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.error import URLError
+from urllib.parse import urlparse
+from urllib.request import urlopen
+
+try:
+    import yaml  # type: ignore
+except Exception:
+    yaml = None  # type: ignore
+
 
 HOME = Path.home()
 CONFIG_PATH = HOME / ".openclaw" / "openclaw.json"
@@ -48,6 +59,168 @@ TOKEN_PATTERNS = [
     re.compile(r'model=(?P<model>\S+).*?(?:tokens|totalTokens)=(?P<tokens>\d+)', re.IGNORECASE),
 ]
 MNEMONIC_KEYWORDS = ("mnemonic", "seed phrase", "seed", "助记词")
+
+
+def _fallback_yaml(raw: str) -> Dict[str, Any]:
+    data: Dict[str, Any] = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        data[key.strip()] = value.strip().strip('"').strip("'")
+    return data
+
+
+def _parse_front_matter(text: str) -> Tuple[Dict[str, Any], str]:
+    stripped = text.lstrip()
+    if not stripped.startswith("---"):
+        return {}, text
+    parts = stripped.split("---", 2)
+    if len(parts) < 3:
+        return {}, text
+    front_raw = parts[1]
+    body = parts[2]
+    manifest: Dict[str, Any] = {}
+    if yaml:
+        try:
+            loaded = yaml.safe_load(front_raw)  # type: ignore[arg-type]
+            if isinstance(loaded, dict):
+                manifest = loaded
+        except Exception:
+            manifest = _fallback_yaml(front_raw)
+    else:
+        manifest = _fallback_yaml(front_raw)
+    if not isinstance(manifest, dict):
+        manifest = {}
+    return manifest, body
+
+
+def _extract_requirements(meta: Any) -> Tuple[List[str], List[str]]:
+    bins: List[str] = []
+    env_vars: List[str] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, str):
+            stripped = node.strip()
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    parsed = json.loads(stripped)
+                except Exception:
+                    return
+                _walk(parsed)
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                lowered = str(key).lower()
+                if lowered in {"bins", "tools"}:
+                    if isinstance(value, list):
+                        bins.extend(str(item) for item in value)
+                    else:
+                        bins.append(str(value))
+                elif lowered in {"env", "envs", "environment", "variables"}:
+                    if isinstance(value, list):
+                        env_vars.extend(str(item) for item in value)
+                    elif isinstance(value, dict):
+                        env_vars.extend(str(k) for k in value.keys())
+                    else:
+                        env_vars.append(str(value))
+                else:
+                    _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    if isinstance(meta, dict):
+        _walk(meta)
+    return bins, env_vars
+
+
+def _load_skill_text_from_path(raw_path: str) -> Tuple[str, str]:
+    path = Path(raw_path).expanduser()
+    candidate = path
+    if path.is_dir():
+        candidate = path / "SKILL.md"
+    if not candidate.exists():
+        raise FileNotFoundError(f"未找到 SKILL.md：{candidate}")
+    text = candidate.read_text(encoding="utf-8", errors="ignore")
+    return candidate.stem, text
+
+
+def _load_skill_text_from_url(url: str) -> Tuple[str, str]:
+    try:
+        context = ssl.create_default_context()
+        with urlopen(url, context=context) as resp:  # nosec - 用户指定 URL
+            charset = resp.headers.get_content_charset() or "utf-8"
+            text = resp.read().decode(charset, errors="ignore")
+    except Exception:
+        proc = subprocess.run(["curl", "-fsSL", url], capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise URLError(proc.stderr.strip() or "无法通过 curl 获取内容")
+        text = proc.stdout
+    name = Path(urlparse(url).path).stem or url
+    return name, text
+
+
+def _analyze_external_skill(name_hint: str, text: str, origin: str) -> Dict[str, Any]:
+    manifest, body = _parse_front_matter(text)
+    payload = manifest if isinstance(manifest, dict) else {}
+    name = payload.get("name") or name_hint or origin
+    bins, env_vars = _extract_requirements(payload)
+    risk_score, meta_notes = _assess_skill_risk(name, payload)
+    notes = [f"未安装 skill · 来源：{origin}"]
+    if env_vars:
+        unique_env = sorted(set(env_vars))
+        notes.append("声明环境变量：" + ", ".join(unique_env))
+        risk_score = min(100, risk_score + 5)
+    if bins:
+        notes.append("依赖工具：" + ", ".join(sorted(set(bins))))
+    for label, pattern in SENSITIVE_PATTERNS.items():
+        if pattern.search(body):
+            notes.append(f"正文匹配 {label}")
+            risk_score = min(100, risk_score + 5)
+    masked: Dict[str, str] = {}
+    config_keys: List[str] = []
+    if payload:
+        for key, value in payload.items():
+            config_keys.append(str(key))
+            serialized = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
+            masked[key] = _mask_value(serialized)
+    return {
+        "type": "skill",
+        "name": name,
+        "tools": sorted(set(bins)),
+        "highRiskTools": [],
+        "skills": None,
+        "riskScore": min(100, risk_score),
+        "notes": notes + meta_notes,
+        "configKeys": config_keys,
+        "config": masked,
+    }
+
+
+def load_external_skills(path_inputs: Optional[List[str]], url_inputs: Optional[List[str]]) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    for raw in path_inputs or []:
+        if not raw:
+            continue
+        try:
+            name_hint, text = _load_skill_text_from_path(raw)
+            origin = str(Path(raw).expanduser())
+            entries.append(_analyze_external_skill(name_hint, text, origin))
+        except Exception as exc:
+            print(f"⚠️ 无法读取本地 skill {raw}: {exc}", file=sys.stderr)
+    for url in url_inputs or []:
+        if not url:
+            continue
+        try:
+            name_hint, text = _load_skill_text_from_url(url)
+            entries.append(_analyze_external_skill(name_hint, text, url))
+        except (URLError, OSError) as exc:
+            print(f"⚠️ 无法获取远程 skill {url}: {exc}", file=sys.stderr)
+    return entries
 
 
 def human_size(num_bytes: int) -> str:
@@ -348,9 +521,11 @@ def build_suggestions(report: Dict[str, Any]) -> List[str]:
     return suggestions
 
 
-def generate_report() -> Dict[str, Any]:
+def generate_report(extra_skills: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     config = load_config()
     permissions = collect_permissions(config)
+    if extra_skills:
+        permissions.extend(extra_skills)
     memory_info = scan_memory(MEMORY_DIR)
     log_info, token_info = scan_logs_and_tokens(LOG_DIR)
 
@@ -460,9 +635,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Scan OpenClaw workspace for agent/skill risks.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="输出 JSON 报告路径")
     parser.add_argument("--markdown", type=Path, help="可选 Markdown 报告路径")
+    parser.add_argument("--skill-path", action="append", default=[], help="未安装 skill/agent 的本地路径 (文件或目录)")
+    parser.add_argument("--skill-url", action="append", default=[], help="未安装 skill/agent 的远程 URL")
     args = parser.parse_args()
 
-    report = generate_report()
+    extra_entries = load_external_skills(args.skill_path, args.skill_url)
+    report = generate_report(extra_entries)
     save_report(report, args.output)
     if args.markdown:
         _secure_write(args.markdown, to_markdown(report))
