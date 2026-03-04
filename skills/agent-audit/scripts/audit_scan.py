@@ -138,6 +138,96 @@ def _extract_requirements(meta: Any) -> Tuple[List[str], List[str]]:
     return bins, env_vars
 
 
+def _score_external_metrics(payload: Dict[str, Any], body: str) -> Dict[str, int]:
+    chunks: List[str] = []
+    if payload:
+        try:
+            chunks.append(json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            chunks.append(str(payload))
+    if body:
+        chunks.append(body)
+    haystack = "\n".join(chunks).lower()
+
+    def _hits(keywords: List[str]) -> int:
+        return sum(1 for keyword in keywords if keyword in haystack)
+
+    def _score(base: int, step: int, keywords: List[str], cap: int = 90) -> int:
+        return min(cap, base + _hits(keywords) * step)
+
+    privacy_keywords = [
+        "private key",
+        "mnemonic",
+        "seed",
+        "api_key",
+        "bot_token",
+        "secret",
+        "wallet_private_key",
+        "telegram_bot_token",
+    ]
+    privilege_keywords = [
+        "exec",
+        "subprocess",
+        "docker",
+        "curl",
+        "requests",
+        "websocket",
+        "browser",
+        "message",
+        "nodes",
+        "gateway",
+    ]
+    memory_keywords = ["log", "history", "persist", "state", "memory"]
+    token_keywords = ["openai", "gpt", "llm", "token", "context"]
+    failure_keywords = ["kill switch", "retry", "timeout", "exception", "fail", "watchdog", "error"]
+
+    return {
+        "privacy": _score(5, 15, privacy_keywords),
+        "privilege": _score(15, 10, privilege_keywords),
+        "memory": _score(10, 10, memory_keywords),
+        "token": _score(10, 10, token_keywords),
+        "failure": _score(20, 10, failure_keywords),
+    }
+
+    bins: List[str] = []
+    env_vars: List[str] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, str):
+            stripped = node.strip()
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    parsed = json.loads(stripped)
+                except Exception:
+                    return
+                _walk(parsed)
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                lowered = str(key).lower()
+                if lowered in {"bins", "tools"}:
+                    if isinstance(value, list):
+                        bins.extend(str(item) for item in value)
+                    else:
+                        bins.append(str(value))
+                elif lowered in {"env", "envs", "environment", "variables"}:
+                    if isinstance(value, list):
+                        env_vars.extend(str(item) for item in value)
+                    elif isinstance(value, dict):
+                        env_vars.extend(str(k) for k in value.keys())
+                    else:
+                        env_vars.append(str(value))
+                else:
+                    _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    if isinstance(meta, dict):
+        _walk(meta)
+    return bins, env_vars
+
+
 def _load_skill_text_from_path(raw_path: str) -> Tuple[str, str]:
     path = Path(raw_path).expanduser()
     candidate = path
@@ -192,6 +282,7 @@ def _analyze_external_skill(name_hint: str, text: str, origin: str) -> Dict[str,
             config_keys.append(str(key))
             serialized = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
             masked[key] = _mask_value(serialized)
+    external_scores = _score_external_metrics(payload, body)
     return {
         "type": "skill",
         "name": name,
@@ -202,6 +293,7 @@ def _analyze_external_skill(name_hint: str, text: str, origin: str) -> Dict[str,
         "notes": notes + meta_notes,
         "configKeys": config_keys,
         "config": masked,
+        "externalScores": external_scores,
     }
 
 
