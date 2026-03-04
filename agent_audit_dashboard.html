@@ -77,6 +77,38 @@
       margin-bottom: 28px;
     }
 
+    .external-skill-block {
+      margin-bottom: 24px;
+    }
+
+    .external-skill-block h3 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+
+    .external-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+    }
+
+    .external-metric {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+    }
+
+    .external-metric .label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .external-metric .value {
+      font-size: 24px;
+      font-weight: 600;
+    }
+
     .card {
       background: var(--card);
       border: 1px solid var(--border);
@@ -199,6 +231,8 @@
       <!-- 风险卡片动态渲染 -->
     </div>
 
+    <div id="externalSummary"></div>
+
     <div class="card legend-card">
       <h2>评分标准</h2>
       <ul>
@@ -234,6 +268,7 @@
 
   <script>
     const riskSummaryEl = document.getElementById('riskSummary');
+    const externalSummaryEl = document.getElementById('externalSummary');
     const permissionTable = document.getElementById('permissionTable');
     const memoryTable = document.getElementById('memoryTable');
     const tokenTable = document.getElementById('tokenTable');
@@ -284,6 +319,36 @@
       }).join('');
 
       const permissions = report.permissions || [];
+      const externalEntries = permissions.filter(item => item.externalScores);
+      if (externalEntries.length) {
+        externalSummaryEl.innerHTML = externalEntries.map(entry => {
+          const scores = entry.externalScores || {};
+          const metrics = [
+            { key: 'privacy', label: '隐私泄露' },
+            { key: 'privilege', label: '越权风险' },
+            { key: 'memory', label: '记忆膨胀' },
+            { key: 'token', label: 'Token 成本' },
+            { key: 'failure', label: '失败率' },
+          ];
+          return `
+          <div class="card external-skill-block">
+            <h3>${escapeHtml(entry.name)} · 未安装 Skill</h3>
+            <div class="external-grid">
+              ${metrics.map(metric => {
+                const value = typeof scores[metric.key] === 'number' ? scores[metric.key] : '-';
+                return `
+                <div class="external-metric">
+                  <div class="label">${metric.label}</div>
+                  <div class="value" style="color:${riskColors(Number(value) || 0)};">${value}</div>
+                </div>`;
+              }).join('')}
+            </div>
+          </div>`;
+        }).join('');
+      } else {
+        externalSummaryEl.innerHTML = '';
+      }
+
       permissionTable.innerHTML = `
         <tr><th>Agent / Skill</th><th>工具权限</th><th>高危</th><th>风险分</th><th>备注</th></tr>
         ${permissions.map(p => `
