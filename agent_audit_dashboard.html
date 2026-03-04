@@ -285,12 +285,13 @@
 
       const permissions = report.permissions || [];
       permissionTable.innerHTML = `
-        <tr><th>Agent / Skill</th><th>工具权限</th><th>高危</th><th>备注</th></tr>
+        <tr><th>Agent / Skill</th><th>工具权限</th><th>高危</th><th>风险分</th><th>备注</th></tr>
         ${permissions.map(p => `
           <tr>
             <td>${escapeHtml((p && p.name) || '-')}</td>
             <td>${escapeHtml((((p && p.tools) || []).join(', ')) || '-')}</td>
             <td><span class="badge">${escapeHtml((((p && p.highRiskTools) || []).join(', ')) || '-')}</span></td>
+            <td>${typeof p.riskScore === 'number' ? p.riskScore : '-'}</td>
             <td>${escapeHtml((((p && p.notes) || []).join('；')) || '-')}</td>
           </tr>`).join('')}
       `;
