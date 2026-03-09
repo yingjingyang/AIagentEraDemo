@@ -10,7 +10,7 @@ import statistics
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -76,7 +76,7 @@ async def run_stress(
     return await asyncio.gather(*tasks)
 
 
-def summarize(results: List[RunResult]) -> None:
+def summarize(results: List[RunResult]) -> Dict[str, Any]:
     total = len(results)
     successes = sum(1 for item in results if item.ok)
     durations = [item.duration for item in results]
@@ -94,6 +94,52 @@ def summarize(results: List[RunResult]) -> None:
             print(f"- Run #{item.idx} exit {item.code}, duration {item.duration:.2f}s")
     else:
         print("No failures detected.")
+    return {
+        "total": total,
+        "successes": successes,
+        "durations": durations,
+        "avg": avg,
+        "p95": p95,
+        "failures": failed,
+        "success_rate": (successes / total) if total else 0.0,
+    }
+
+
+def write_summary_report(
+    path: Path,
+    stats: Dict[str, Any],
+    command_template: str,
+    runs: int,
+    concurrency: int,
+    skill_dir: Path | None,
+    log_dir: Path | None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Skill Stress Summary",
+        "",
+        "## 执行参数",
+        f"- Command: `{command_template}`",
+        f"- Runs: {runs}",
+        f"- Concurrency: {concurrency}",
+        f"- Skill dir: {skill_dir if skill_dir else '-'}",
+        f"- Log dir: {log_dir if log_dir else '-'}",
+        "",
+        "## 结果概览",
+        f"- 总次数: {stats['total']}",
+        f"- 成功次数: {stats['successes']} ({stats['success_rate']*100:.1f}% )",
+        f"- 平均耗时: {stats['avg']:.2f}s",
+        f"- P95 耗时: {stats['p95']:.2f}s",
+    ]
+    if stats["failures"]:
+        lines.append("")
+        lines.append("### 失败样本")
+        for item in stats["failures"][:5]:
+            lines.append(f"- Run #{item.idx} exit {item.code}, duration {item.duration:.2f}s")
+    lines.append("")
+    lines.append("> 由 stress_runner 自动生成，仅保留汇总结果；如需原始 stdout/stderr 请查看日志目录。")
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"汇总报告写入：{path}")
 
 
 def main() -> None:
@@ -104,6 +150,7 @@ def main() -> None:
     parser.add_argument("--workdir", type=Path, help="命令执行目录")
     parser.add_argument("--log-dir", type=Path, help="保存 stdout/stderr 的目录 (可选)")
     parser.add_argument("--skill-dir", type=Path, help="被压测的 skill 目录（用于 {skill}/{skill_name} 占位符）")
+    parser.add_argument("--summary-report", type=Path, help="汇总 Markdown 报告输出路径")
     args = parser.parse_args()
 
     if args.runs <= 0:
@@ -114,6 +161,7 @@ def main() -> None:
     workdir = args.workdir.resolve() if args.workdir else None
     log_dir = args.log_dir.resolve() if args.log_dir else None
     skill_dir = args.skill_dir.resolve() if args.skill_dir else None
+    summary_report = args.summary_report.resolve() if args.summary_report else None
 
     if workdir and not workdir.exists():
         parser.error(f"工作目录不存在：{workdir}")
@@ -128,7 +176,9 @@ def main() -> None:
     results = asyncio.run(
         run_stress(args.command, args.runs, args.concurrency, workdir, log_dir, context)
     )
-    summarize(results)
+    stats = summarize(results)
+    if summary_report:
+        write_summary_report(summary_report, stats, args.command, args.runs, args.concurrency, skill_dir, log_dir)
 
 
 if __name__ == "__main__":
