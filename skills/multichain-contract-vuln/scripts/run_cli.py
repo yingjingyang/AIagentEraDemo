@@ -16,10 +16,18 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
+from urllib import error as urlerror, request as urlrequest
 
 SEVERITY_ORDER = ["Critical", "High", "Medium", "Low", "Informational"]
+ETHERSCAN_DOMAINS = {
+    "mainnet": "api.etherscan.io",
+    "goerli": "api-goerli.etherscan.io",
+    "sepolia": "api-sepolia.etherscan.io",
+}
+CHAIN_IDS = {"mainnet": 1, "goerli": 5, "sepolia": 11155111}
 
 
 def slugify(name: str) -> str:
@@ -41,6 +49,109 @@ def detect_chain(input_path: Path, explicit: str | None) -> str:
 def run_cmd(cmd: List[str], cwd: Path | None = None) -> Tuple[int, str, str]:
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+def _sanitize_relative_path(rel_path: str) -> Path:
+    cleaned = rel_path.replace("\\", "/").lstrip("/")
+    path = Path(cleaned)
+    # 防止 .. 逃逸
+    sanitized = Path()
+    for part in path.parts:
+        if part in {"..", ""}:
+            continue
+        sanitized /= part
+    return sanitized if str(sanitized) else Path("Contract.sol")
+
+
+def _parse_etherscan_sources(raw: str, contract_name: str) -> Dict[str, str]:
+    if not raw:
+        return {}
+    blob = raw.strip()
+    if blob.startswith("{{") and blob.endswith("}}"):
+        blob = blob[1:-1]
+    try:
+        parsed = json.loads(blob)
+        if isinstance(parsed, list) and parsed:
+            parsed = parsed[0]
+        if isinstance(parsed, dict):
+            sources = parsed.get("sources")
+            if isinstance(sources, dict):
+                result: Dict[str, str] = {}
+                for rel, meta in sources.items():
+                    content = meta.get("content") if isinstance(meta, dict) else None
+                    if content:
+                        result[str(_sanitize_relative_path(rel))] = content
+                if result:
+                    return result
+            if "SourceCode" in parsed and isinstance(parsed["SourceCode"], str):
+                return {f"{contract_name or 'Contract'}.sol": parsed["SourceCode"]}
+    except json.JSONDecodeError:
+        pass
+    return {f"{contract_name or 'Contract'}.sol": blob}
+
+
+def fetch_from_etherscan(address: str, network: str, api_key: str | None) -> Dict[str, str]:
+    if not api_key:
+        return {}
+    domain = ETHERSCAN_DOMAINS.get(network, ETHERSCAN_DOMAINS["mainnet"])
+    url = (
+        f"https://{domain}/api?module=contract&action=getsourcecode&address={address}&apikey={api_key}"
+    )
+    try:
+        with urlrequest.urlopen(url, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return {}
+    if payload.get("status") != "1":
+        return {}
+    result = payload.get("result") or []
+    if not result:
+        return {}
+    entry = result[0]
+    return _parse_etherscan_sources(entry.get("SourceCode", ""), entry.get("ContractName", ""))
+
+
+def fetch_from_sourcify(address: str, network: str) -> Dict[str, str]:
+    chain_id = CHAIN_IDS.get(network, 1)
+    buckets = ["full_match", "partial_match"]
+    for bucket in buckets:
+        base = f"https://repo.sourcify.dev/contracts/{bucket}/{chain_id}/{address}/"
+        metadata_url = base + "metadata.json"
+        try:
+            with urlrequest.urlopen(metadata_url, timeout=15) as resp:
+                metadata = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            continue
+        sources = metadata.get("sources")
+        if not isinstance(sources, dict):
+            continue
+        result: Dict[str, str] = {}
+        for rel, meta in sources.items():
+            content = meta.get("content") if isinstance(meta, dict) else None
+            if not content:
+                continue
+            result[str(_sanitize_relative_path(rel))] = content
+        if result:
+            return result
+    return {}
+
+
+def download_onchain_sources(address: str, network: str, api_key: str | None) -> Tuple[Path | None, str | None]:
+    normalized = address.strip()
+    if not normalized.startswith("0x"):
+        normalized = "0x" + normalized
+    normalized = normalized.lower()
+    tmp_root = Path(tempfile.mkdtemp(prefix="multichain-evm-"))
+    dest_dir = tmp_root / normalized.replace("0x", "")
+    etherscan_sources = fetch_from_etherscan(normalized, network, api_key)
+    sources = etherscan_sources or fetch_from_sourcify(normalized, network)
+    if not sources:
+        return None, None
+    for rel, content in sources.items():
+        path = dest_dir / _sanitize_relative_path(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    return dest_dir, f"链上地址 {normalized} 的源码已下载到 {dest_dir}"
 
 
 def run_slither(target: Path, json_path: Path, slither_bin: str | None = None) -> Tuple[bool, str]:
@@ -168,7 +279,10 @@ def build_report(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="multichain-contract-vuln CLI helper")
-    parser.add_argument("--input", required=True, help="待分析的合约文件或目录")
+    parser.add_argument("--input", help="待分析的合约文件或目录")
+    parser.add_argument("--evm-address", help="链上 EVM 合约地址（自动下载源码）")
+    parser.add_argument("--network", default="mainnet", help="EVM 网络：mainnet/goerli/sepolia，默认 mainnet")
+    parser.add_argument("--etherscan-api-key", help="Etherscan API Key（默认读取环境变量）")
     parser.add_argument("--chain", choices=["evm", "solana"], help="目标链别")
     parser.add_argument("--scope", help="报告名称/前缀，默认取输入目录名")
     parser.add_argument(
@@ -179,18 +293,33 @@ def main() -> int:
     parser.add_argument("--run-anchor", action="store_true", help="Solana 项目额外执行 anchor test")
     args = parser.parse_args()
 
-    target = Path(args.input).expanduser().resolve()
-    if not target.exists():
-        print(f"输入路径不存在：{target}", file=sys.stderr)
+    notes: List[str] = []
+    target: Path | None = None
+    if args.input:
+        target = Path(args.input).expanduser().resolve()
+        if not target.exists():
+            print(f"输入路径不存在：{target}", file=sys.stderr)
+            return 1
+    elif args.evm_address:
+        api_key = args.etherscan_api_key or os.getenv("ETHERSCAN_API_KEY")
+        fetched_dir, fetch_note = download_onchain_sources(args.evm_address, args.network.lower(), api_key)
+        if not fetched_dir:
+            print("❌ 无法从链上获取源码（请确认地址已验证或配置 Etherscan/Sourcify）", file=sys.stderr)
+            return 1
+        target = fetched_dir
+        if fetch_note:
+            notes.append(fetch_note)
+    else:
+        print("必须提供 --input 或 --evm-address", file=sys.stderr)
         return 1
 
-    chain = detect_chain(target, args.chain)
+    chain_hint = args.chain or ("evm" if args.evm_address else None)
+    chain = detect_chain(target, chain_hint)
     scope = args.scope or slugify(target.stem if target.is_file() else target.name)
     report_path = Path(args.report).expanduser().resolve() if args.report else Path.cwd() / "reports" / f"{scope}-multichain-audit.md"
 
     slither_data = None
     solana_logs: List[str] | None = None
-    notes: List[str] = []
 
     if chain == "evm":
         json_path = report_path.with_suffix(".slither.json")

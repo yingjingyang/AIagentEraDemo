@@ -10,6 +10,9 @@ description: "安全审计与漏洞报告技能：针对单个或批量 EVM / So
 
 ## 快速指引
 1. **确认范围**：链别（EVM / Solana）、合约路径或目录、编译/测试框架。
+   - 仅有链上地址？先按 [On-chain Source Retrieval](references/onchain-fetch.md) 抓取源码：
+     - EVM：使用 `scripts/run_cli.py --evm-address <addr> --network mainnet --chain evm`（需 `ETHERSCAN_API_KEY`，否则回退 Sourcify）。
+     - Solana：`solana program dump` 获取 `.so`，`anchor idl fetch` 拉取 IDL，或联系项目索取源码。
 2. **选择检查清单**：
    - [EVM Checklist](references/evm-checklist.md) 适用于 Solidity/Vyper。
    - [Solana Checklist](references/solana-checklist.md) 适用于 Anchor/Rust 程序。
@@ -17,6 +20,16 @@ description: "安全审计与漏洞报告技能：针对单个或批量 EVM / So
 4. **输出报告**：遵循 [Report Template](references/report-template.md) 填写审计结果，逐个漏洞列出 PoC 与修复建议。
 
 ## 流程细节
+
+### 链上源码获取
+- **EVM**：`scripts/run_cli.py --evm-address 0x... --network <mainnet|sepolia|goerli> --chain evm`。脚本会：
+  1. 读取 `ETHERSCAN_API_KEY`（或 `--etherscan-api-key`），调用 Etherscan API 下载验证源码；
+  2. 若无 API Key，则尝试从 Sourcify full_match 仓库拉取；
+  3. 将源码写入临时目录（打印路径），随后继续执行 Slither 分析。
+- **Solana**：
+  1. `solana program dump <PROGRAM_ID> tmp/<id>.so`，并用 `solana program show` 获取 ProgramData；
+  2. `anchor idl fetch <PROGRAM_ID> -o idl.json`；
+  3. 若仍缺源码，在报告中声明“基于 IDL/BPF 反编译”。
 
 ### 1. 单合约分析
 - **EVM**
