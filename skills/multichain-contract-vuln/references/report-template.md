@@ -1,44 +1,44 @@
-# 合约漏洞报告模板
+# Smart Contract Vulnerability Report Template
 
-> 将以下区块复制到最终交付文档中。根据每个漏洞补充细节、PoC 以及修复建议。
+> Copy the following structure into the final deliverable. Enrich each section with the actual scope, PoCs, and remediation guidance.
 
-## 1. 执行摘要
-- 项目 / 合约目录：
-- 区块链：EVM / Solana
-- 审计范围：单个合约 / 目录
-- 审计时间：
-- 工具：
-- 总结：发现 **X** 个问题（Critical **a** / High **b** / Medium **c** / Low **d** / Info **e**）
+## 1. Executive Summary
+- Project / Codebase:
+- Blockchain: EVM / Solana
+- Scope: Single contract / repository
+- Audit Window:
+- Tooling (list tool names/versions only; keep methodology details in Section 2):
+- Summary: Identified **X** issues (Critical **a** / High **b** / Medium **c** / Low **d** / Informational **e**)
 
-## 2. 方法论
-- 静态分析：列出工具和命令
-- 动态/模糊测试：命令 & 覆盖率
-- 手工审查重点：权限、资金流、状态机
+## 2. Methodology
+- Static analysis: tools & commands executed
+- Dynamic/fuzz testing: tooling, scenarios, coverage
+- Manual review focus areas: permissions, fund flows, state machines
 
-## 3. 漏洞详情 (按严重度排序)
+## 3. Findings (ordered by severity)
 
-### [Severity] 漏洞名称
-- **合约 / 指令**：
-- **描述**：
-- **影响**：
-- **条件**：
-- **利用难度**：Low / Medium / High
-- **状态**：未修复 / 已修复待验证 / 已验证修复
+### [Severity] Finding Title
+- **Contract / Instruction**:
+- **Description**:
+- **Impact**:
+- **Preconditions**:
+- **Exploitability**: Low / Medium / High
+- **Status**: Unfixed / Fixed (pending validation) / Verified fixed
 
-#### 3.1 复现步骤 / 攻击代码
-- **EVM**：提供 Foundry/Hardhat 测试或脚本（`forge test --match-test ...`）。
-- **Solana**：提供 Anchor/TypeScript 测试，包含交易序列。
-- 关键代码块使用 ```language fenced code```。
+#### 3.1 Reproduction / Exploit Code
+- **EVM**: Provide Foundry/Hardhat tests or scripts (`forge test --match-test ...`).
+- **Solana**: Provide Anchor/TypeScript tests with the transaction sequence.
+- Use fenced code blocks (```language) for critical snippets.
 
-#### 3.2 修复建议
-- 解释根因：检查-效应-交互、权限/权限控制、整数溢出等。
-- 提供参考实现（必要时给出代码 diff）。
-- 如果需要治理升级，注明步骤。
+#### 3.2 Remediation Guidance
+- Explain the root cause (e.g., checks-effects-interactions violations, access control gaps, arithmetic errors).
+- Provide reference implementations or code diffs where possible.
+- If governance upgrades are required, document the steps.
 
-## 4. 其他观察
-- Gas 优化、代码风格、文档建议。
+## 4. Additional Observations
+- Gas optimization, style notes, documentation suggestions.
 
-## 5. 附录
-- 命令日志片段
-- 测试输出摘要
-- 版本信息（solc/anchor-cli 等）
+## 5. Appendix
+- Command logs
+- Test output summaries
+- Toolchain versions (solc/anchor-cli/etc.)

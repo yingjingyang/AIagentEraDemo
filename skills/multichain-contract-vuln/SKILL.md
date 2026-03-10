@@ -17,7 +17,7 @@ description: "安全审计与漏洞报告技能：针对单个或批量 EVM / So
    - [EVM Checklist](references/evm-checklist.md) 适用于 Solidity/Vyper。
    - [Solana Checklist](references/solana-checklist.md) 适用于 Anchor/Rust 程序。
 3. **执行分析**：按照对应清单完成工具运行、手工审查和 PoC 编写。
-4. **输出报告**：遵循 [Report Template](references/report-template.md) 填写审计结果，逐个漏洞列出 PoC 与修复建议。
+4. **输出报告**：遵循 [Report Template](references/report-template.md) 填写审计结果，逐个漏洞列出 PoC 与修复建议；执行摘要仅展示项目、链别、范围、时间、工具与问题统计，不在此描述方法，方法细节统一写在第 2 节《方法论》；除非用户另行指定，整份报告（标题、描述、漏洞详情）默认使用英文，可在需要时附中文摘要作为补充。
 
 ## 流程细节
 
@@ -62,7 +62,7 @@ description: "安全审计与漏洞报告技能：针对单个或批量 EVM / So
 ## 产出要求
 - **始终输出 Markdown 报告**：将审计结论写入 `reports/<scope>-multichain-audit.md`（若文件夹不存在先创建）。结构遵循 [Report Template](references/report-template.md)。如用户额外要求 PDF，可在 Markdown 基础上导出。
 - **在最终回复中明确报告绝对路径**，如 `/Users/.../reports/<scope>-multichain-audit.md`，便于用户定位。
-- 若用户提供仓库：在 `reports/` 目录下保存工具输出与 PoC 脚本，方便复查。
+- 若用户提供仓库：在 `reports/` 目录下保存工具输出与 PoC 脚本，方便复查，并在报告附录中引用**绝对路径**（例如 `/Users/.../repos/.../FeiProtocol.attack.sol`）。
 - 对每个漏洞明确当前状态：`Unfixed / Pending Review / Fixed`。
 
 ## 提示

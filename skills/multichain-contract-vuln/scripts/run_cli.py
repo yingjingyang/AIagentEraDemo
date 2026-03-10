@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib import error as urlerror, request as urlrequest
 
 SEVERITY_ORDER = ["Critical", "High", "Medium", "Low", "Informational"]
@@ -28,6 +28,7 @@ ETHERSCAN_DOMAINS = {
     "sepolia": "api-sepolia.etherscan.io",
 }
 CHAIN_IDS = {"mainnet": 1, "goerli": 5, "sepolia": 11155111}
+SOURCE_EXTS = {".sol", ".vy", ".rs", ".ts", ".tsx", ".js", ".toml", ".json"}
 
 
 def slugify(name: str) -> str:
@@ -152,6 +153,33 @@ def download_onchain_sources(address: str, network: str, api_key: str | None) ->
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
     return dest_dir, f"链上地址 {normalized} 的源码已下载到 {dest_dir}"
+
+
+def _collect_source_files(target: Path) -> List[Path]:
+    if target.is_file():
+        return [target]
+    files: List[Path] = []
+    for ext in SOURCE_EXTS:
+        files.extend(sorted(target.rglob(f"*{ext}")))
+    return files[:100]
+
+
+def bundle_sources(target: Path, bundle_path: Path) -> Optional[str]:
+    sources = _collect_source_files(target)
+    if not sources:
+        return None
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(bundle_path, "w", encoding="utf-8") as fh:
+        fh.write("# Contract Sources Bundle\n\n")
+        for path in sources:
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            language = path.suffix.lstrip('.') or 'txt'
+            fh.write(f"## {path}\n")
+            fh.write(f"```{language}\n{text}\n```\n\n")
+    return f"源码聚合文件：{bundle_path}（共 {len(sources)} 个文件）"
 
 
 def run_slither(target: Path, json_path: Path, slither_bin: str | None = None) -> Tuple[bool, str]:
@@ -290,7 +318,9 @@ def main() -> int:
         help="输出 Markdown 路径（默认 reports/<scope>-multichain-audit.md）",
     )
     parser.add_argument("--slither-bin", help="自定义 slither 可执行路径")
-    parser.add_argument("--run-anchor", action="store_true", help="Solana 项目额外执行 anchor test")
+    parser.add_argument("--auto-static", action="store_true", help="启用本地静态分析（默认关闭，以便改用 AI 审计）")
+    parser.add_argument("--run-anchor", action="store_true", help="Solana 项目额外执行 anchor test（需同时开启 --auto-static）")
+    parser.add_argument("--bundle", type=Path, help="把源码聚合输出到 Markdown，便于 AI 审计")
     args = parser.parse_args()
 
     notes: List[str] = []
@@ -317,9 +347,20 @@ def main() -> int:
     chain = detect_chain(target, chain_hint)
     scope = args.scope or slugify(target.stem if target.is_file() else target.name)
     report_path = Path(args.report).expanduser().resolve() if args.report else Path.cwd() / "reports" / f"{scope}-multichain-audit.md"
+    bundle_path = (
+        Path(args.bundle).expanduser().resolve()
+        if args.bundle
+        else Path.cwd() / "reports" / f"{scope}-sources.md"
+    )
 
     slither_data = None
     solana_logs: List[str] | None = None
+
+    bundle_note = bundle_sources(target, bundle_path)
+    if bundle_note:
+        notes.append(bundle_note)
+    else:
+        notes.append("未生成源码聚合（未检测到支持的源码后缀）")
 
     if chain == "evm":
         json_path = report_path.with_suffix(".slither.json")
